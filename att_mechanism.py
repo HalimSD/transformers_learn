@@ -11,18 +11,22 @@ class SelfAttention(nn.Module):
         assert (self.head_dim * heads == embed_size), 'Embed size must be div by the number of heads'
 
         self.values = nn.Linear(self.head_dim, self.head_dim , bias=False)
-        self.values = nn.Linear(self.head_dim, self.head_dim , bias=False)
+        self.keys = nn.Linear(self.head_dim, self.head_dim , bias=False)
         self.queries = nn.Linear(self.head_dim, self.head_dim , bias=False)
         self.fc_out = nn.Linear(heads*self.head_dim, embed_size)
 
-    def forward(self, keys, values, query, mask):
+    def forward(self, values, keys, query, mask):
         N = query.shape[0] # number of training examples, How many examples we send in at the same time
         value_len, key_len, query_len = values.shape[1], keys.shape[1], query.shape[1]
 
         # split embedings into self.heads pieces
         values = values.reshape(N, value_len, self.heads, self.head_dim)
         keys = keys.reshape(N, key_len, self.heads, self.head_dim)
-        queries = query.reshape(N, query_len, self.heads, self.head_dim)
+        query = query.reshape(N, query_len, self.heads, self.head_dim)
+
+        values = self.values(values)
+        keys = self.keys(keys)
+        queries = self.queries(query)
 
         #multiply the queries by the keys
         ene = torch.einsum("nqhd,nkhd->nhqk", [queries, keys])
@@ -56,20 +60,20 @@ class TransformerBlock(nn.Module):
             nn.Linear(forward_expansion*embed_size, embed_size)
         )
 
-        self.dorpout = nn.Dropout(dropout)
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, value, key, query, mask):
         attention = self.attention(value, key, query, mask)
-        x = self.dorpout(self.norm1(attention + query))
+        x = self.dropout(self.norm1(attention + query))
 
         forward = self.feed_forward(x)
 
-        out = self.dorpout(self.norm2(forward+x))
+        out = self.dropout(self.norm2(forward+x))
         return out
 
 class Encoder(nn.Module):
     def __init__(self, src_vocab_size, embed_size, num_layers, heads, 
-                    forward_expansion, dropout, max_lenght, device):
+                    device, forward_expansion, dropout, max_lenght):
         super(Encoder, self).__init__()
 
         self.embed_size = embed_size
@@ -80,7 +84,7 @@ class Encoder(nn.Module):
 
         self.layers = nn.ModuleList([
             TransformerBlock(embed_size, heads, dropout,forward_expansion)
-        ])
+        for _ in range(num_layers)])
 
         self.dropout = nn.Dropout(dropout)
 
@@ -101,12 +105,12 @@ class DecoderBlock(nn.Module):
         self.attention = SelfAttention(embed_size, heads)
         self.norm = nn.LayerNorm(embed_size)
         self.transformer_block = TransformerBlock(embed_size,heads,dropout,forward_expansion)
-        self.dropout = dropout
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x, value, key, src_mask, target_mask):
         attention = self.attention(x,x,x, target_mask)
         query = self.dropout(self.norm(attention + x))
-        out = self.transformer_block(key, value, query, src_mask)
+        out = self.transformer_block(value, key, query, src_mask)
 
         return out
 
@@ -146,7 +150,7 @@ class Transformer(nn.Module):
         super(Transformer, self).__init__()
 
         self.encoder = Encoder(src_vocab_size, embed_size, num_layers, heads, 
-                                forward_expansion, dropout, max_len, device )
+                                device, forward_expansion, dropout, max_len)
 
         self.decoder = Decoder(target_vocab_size, embed_size, num_layers, heads, 
                                 forward_expansion, dropout, device, max_len)
@@ -161,7 +165,7 @@ class Transformer(nn.Module):
 
     def make_target_mask(self, target):
         N, target_len = target.shape
-        target_mask = torch.tril(torch.ones((target_len,target_len))).expand(
+        target_mask = torch.tril(torch.ones(target_len,target_len)).expand(
             N, 1, target_len, target_len
         )
         return target_mask.to(self.device)
@@ -174,3 +178,21 @@ class Transformer(nn.Module):
         return out
 
 
+if __name__ == "__main__":
+    device = torch.device ("cuda" if torch.cuda.is_available() else "cpu")
+    print(device)
+
+    x = torch.tensor([[1, 5, 6, 4, 3, 9, 5, 2, 0], [1, 8, 7, 3, 4, 5, 6, 7, 2]]).to(
+        device
+    )
+    trg = torch.tensor([[1, 7, 4, 3, 5, 9, 2, 0], [1, 5, 6, 2, 4, 7, 6, 2]]).to(device)
+
+    src_pad_idx = 0
+    trg_pad_idx = 0
+    src_vocab_size = 10
+    trg_vocab_size = 10
+    model = Transformer(src_vocab_size, trg_vocab_size, src_pad_idx, trg_pad_idx, device=device).to(
+        device
+    )
+    out = model(x, trg[:, :-1])
+    print(out.shape)
