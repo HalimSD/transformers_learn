@@ -138,4 +138,39 @@ class Decoder(nn.Module):
         return out 
 
 
+class Transformer(nn.Module):
+    def __init__(self, 
+                    src_vocab_size, target_vocab_size, src_pad_indx, target_pad_indx, 
+                    embed_size= 256, num_layers= 6, forward_expansion= 4, 
+                    heads= 8, dropout= 0, device= 'cuda', max_len= 100 ):
+        super(Transformer, self).__init__()
+
+        self.encoder = Encoder(src_vocab_size, embed_size, num_layers, heads, 
+                                forward_expansion, dropout, max_len, device )
+
+        self.decoder = Decoder(target_vocab_size, embed_size, num_layers, heads, 
+                                forward_expansion, dropout, device, max_len)
+
+        self.src_pad_indx = src_pad_indx
+        self.target_pad_indx = target_pad_indx
+        self.device = device
+
+    def make_src_mask(self, src):
+        src_mask = (src != self.src_pad_indx).unsqueeze(1).unsqueeze(2) #(N,1,1,src_len)
+        return src_mask.to(self.device)
+
+    def make_target_mask(self, target):
+        N, target_len = target.shape
+        target_mask = torch.tril(torch.ones((target_len,target_len))).expand(
+            N, 1, target_len, target_len
+        )
+        return target_mask.to(self.device)
+
+    def forward(self, src, target):
+        src_mask = self.make_src_mask(src)
+        target_mask = self.make_target_mask(target)
+        enc_src = self.encoder(src, src_mask)
+        out = self.decoder(target, enc_src, src_mask, target_mask)
+        return out
+
 
